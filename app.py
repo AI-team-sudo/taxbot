@@ -37,6 +37,32 @@ client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 pc = Pinecone(api_key=st.secrets["PINECONE_API_KEY"])
 index = pc.Index("gujtaxlaw")
 
+def chunk_text(text: str, max_tokens: int = 3000) -> List[str]:
+    """Split text into chunks of approximately max_tokens."""
+    # Rough approximation: 1 token ≈ 4 characters
+    chars_per_chunk = max_tokens * 4
+
+    # Split by newlines first to maintain context
+    paragraphs = text.split('\n')
+    chunks = []
+    current_chunk = []
+    current_length = 0
+
+    for paragraph in paragraphs:
+        paragraph_length = len(paragraph)
+        if current_length + paragraph_length > chars_per_chunk and current_chunk:
+            chunks.append('\n'.join(current_chunk))
+            current_chunk = [paragraph]
+            current_length = paragraph_length
+        else:
+            current_chunk.append(paragraph)
+            current_length += paragraph_length
+
+    if current_chunk:
+        chunks.append('\n'.join(current_chunk))
+
+    return chunks
+
 def get_embedding(text: str) -> List[float]:
     """Get embedding for the input text using OpenAI's embedding model."""
     # First translate Gujarati text to English if needed
@@ -94,19 +120,73 @@ def translate_text(text: str, target_lang: str) -> str:
         raise Exception(f"Translation failed: {str(e)}")
 
 def generate_response(query: str, context: str, system_prompt: str):
-    """Generate response using OpenAI with context and system prompt."""
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": f"Context: {context}\n\nQuestion: {query}"}
-    ]
+    """Generate response using OpenAI with context and system prompt, handling long contexts."""
+    # Split context into manageable chunks
+    context_chunks = chunk_text(context)
 
-    response = client.chat.completions.create(
-        model="gpt-4",
-        messages=messages,
-        temperature=0.7,
-        max_tokens=1000
-    )
-    return response.choices[0].message.content
+    # Initialize response parts
+    response_parts = []
+
+    # Process each chunk
+    for i, chunk in enumerate(context_chunks):
+        # Modify the prompt based on chunk position
+        if i == 0:
+            chunk_prompt = f"Part 1/{len(context_chunks)} of the context. Answer based on this and upcoming parts: {query}"
+        else:
+            chunk_prompt = f"Part {i+1}/{len(context_chunks)} of the context. Continue building the answer with this additional information."
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Context: {chunk}\n\nQuestion: {chunk_prompt}"}
+        ]
+
+        # Add previous response parts for context if not first chunk
+        if i > 0:
+            messages.append({"role": "assistant", "content": "Previous parts of the response: " + " ".join(response_parts)})
+
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4",
+                messages=messages,
+                temperature=0.7,
+                max_tokens=1000
+            )
+
+            response_parts.append(response.choices[0].message.content)
+
+            # Add a small delay between API calls to avoid rate limits
+            time.sleep(1)
+
+        except Exception as e:
+            if DEBUG:
+                st.error(f"Error generating response for chunk {i+1}: {str(e)}")
+            continue
+
+    # Combine all response parts
+    final_response = "\n\n".join(response_parts)
+
+    # Generate a summary/consolidation if there were multiple chunks
+    if len(response_parts) > 1:
+        try:
+            summary_messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Original question: {query}\n\nPlease provide a concise, coherent summary of the following detailed response: {final_response}"}
+            ]
+
+            summary_response = client.chat.completions.create(
+                model="gpt-4",
+                messages=summary_messages,
+                temperature=0.7,
+                max_tokens=1000
+            )
+
+            final_response = summary_response.choices[0].message.content
+
+        except Exception as e:
+            if DEBUG:
+                st.error(f"Error generating summary: {str(e)}")
+
+    return final_response
 
 # Streamlit UI
 st.title("ગુજરાત કર કાયદો સહાયક | Gujarat Tax Law Assistant")
