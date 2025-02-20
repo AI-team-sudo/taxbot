@@ -10,7 +10,7 @@ import math
 DEBUG = st.sidebar.checkbox("Debug Mode", False)
 
 # System prompt definition
-system_prompt = """You are an authoritative expert on the Gujrat Tax Law and the Ahmedabad Municipal Corporation.
+system_prompt = """You are an authoritative expert on the Gujrat Property Tax Law.
 Your responses should be:
 1. Comprehensive and detailed
 2. Include step-by-step procedures when applicable
